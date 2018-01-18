@@ -61,11 +61,16 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 
+import static android.media.AudioRecord.SUCCESS;
+
 public class DetectActivity extends AppCompatActivity {
 
     private TextView responseText;
 
     public static final int TAKE_PHOTO = 1;
+    public static final int CHOOSE_PHOTO = 2;
+    public static final int SUCCESS = 1;
+    public static final int FAIL = 2;
 
     private ImageView picture;
 
@@ -73,10 +78,6 @@ public class DetectActivity extends AppCompatActivity {
 
     private String ImagePath = null;
     private String ImageName = null;
-
-
-    public static final int CHOOSE_PHOTO = 2;
-
     private Paint paint;
     // 画布
     private Paint textPaint;
@@ -113,7 +114,7 @@ public class DetectActivity extends AppCompatActivity {
     public static int json_choose=0;
 
     private Handler handler = null;
-
+    private ProgressDialog waitingDialog;
 
 
 
@@ -122,6 +123,7 @@ public class DetectActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_detect);
         picture = (ImageView) findViewById(R.id.picture);
+        final ProgressDialog waitingDialog = new ProgressDialog(DetectActivity.this);
 
         Button downloadPic = (Button) findViewById(R.id.download_pic) ;
         downloadPic.setOnClickListener(new View.OnClickListener() {
@@ -158,18 +160,6 @@ public class DetectActivity extends AppCompatActivity {
                     faceEmotions = null;
                     showWaitDialog();
                     sendPostWithOkHttp("http://192.168.0.56:8000/v1/detect");
-//                    Toast.makeText(DetectActivity.this,"上传中，请等待",Toast.LENGTH_SHORT).show();
-                    new Thread() {
-                        public void run(){
-                            try {
-                                Thread.currentThread().sleep(5000);
-                            } catch (InterruptedException e) {
-                                e.printStackTrace();
-                            }
-                            handler.post(runnableUi);
-                        }
-                    }.start();
-
                 }else{
                     Toast.makeText(DetectActivity.this,"请拍照或从相册选择图片",Toast.LENGTH_SHORT).show();
                 }
@@ -191,11 +181,9 @@ public class DetectActivity extends AppCompatActivity {
             public void onCheckedChanged(CompoundButton compoundButton, boolean ageKey) {
                if(ageKey){
                    AgeKey = "true";
-                   json_choose = 1;
                }else {
                    AgeKey = "false";
                }
-               Log.d("DetectActivity",AgeKey+Integer.toString(json_choose));
             }
         });
 
@@ -446,27 +434,20 @@ public class DetectActivity extends AppCompatActivity {
         listDialog.show();
     }
 
-    private void showWaitDialog(){
-        //等待Dialog具有屏蔽其他控件的交互能力
-        //@setCancelable 为使屏幕不可点击，设置为不可取消(false)
-        //下载等事件完成后，主动调用函数关闭该Dialog
-        final ProgressDialog waitingDialog = new ProgressDialog(DetectActivity.this);
-        waitingDialog.setTitle("识别人脸中");
-        waitingDialog.setMessage("请等待……");
-        waitingDialog.setIndeterminate(true);
-        waitingDialog.setCancelable(false);
-        waitingDialog.show();
-        new Thread() {
-            public void run(){
-                try {
-                    Thread.currentThread().sleep(4500);
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
-                waitingDialog.dismiss();
-            }
-        }.start();
-    }
+
+        public void showWaitDialog(){
+            //等待Dialog具有屏蔽其他控件的交互能力
+            //@setCancelable 为使屏幕不可点击，设置为不可取消(false)
+            //下载等事件完成后，主动调用函数关闭该Dialog
+            waitingDialog = new ProgressDialog(DetectActivity.this);
+            waitingDialog.setTitle("识别人脸中");
+            waitingDialog.setMessage("请等待……");
+            waitingDialog.setIndeterminate(true);
+            waitingDialog.setCancelable(false);
+            waitingDialog.show();
+        }
+
+
 
     public abstract class NoDoubleClickListener implements View.OnClickListener {
         public static final int MIN_CLICK_DELAY_TIME = 1000;
@@ -498,7 +479,9 @@ public class DetectActivity extends AppCompatActivity {
             client.newCall(request).enqueue(callback);
         }
 
-        public static void postOkHttpRequest(String address,String filePath,String fileName,String AgeKey,okhttp3.Callback callback) {
+        public static void postOkHttpRequest(String address,String filePath,String fileName,
+                                             String AgeKey,String EmotionsKey,String GenderKey,
+                                             okhttp3.Callback callback) {
 
 
             OkHttpClient client = new OkHttpClient();
@@ -507,8 +490,8 @@ public class DetectActivity extends AppCompatActivity {
             RequestBody requestBody = new MultipartBody.Builder()
                     .setType(MultipartBody.FORM)
                     .addFormDataPart("photo", fileName, fileBody)
-                    .addFormDataPart("emotions","true")
-                    .addFormDataPart("gender","true")
+                    .addFormDataPart("emotions",EmotionsKey)
+                    .addFormDataPart("gender",GenderKey)
                     .addFormDataPart("age",AgeKey)
                     .build();
 
@@ -530,17 +513,24 @@ public class DetectActivity extends AppCompatActivity {
         new Thread(new Runnable() {
             @Override
             public void run() {
-                HttpUtil.postOkHttpRequest(address,ImagePath,ImageName,AgeKey,new okhttp3.Callback(){
+                HttpUtil.postOkHttpRequest(address,ImagePath,ImageName,
+                        AgeKey,EmotionsKey,GenderKey,new okhttp3.Callback(){
 
                     @Override
                     public void onResponse(Call call, Response response) throws IOException {
                         //解析JSON
                         String responseData = response.body().string();
                         parseJSONWithJSONObjectOfDetect(responseData);
+                        Message message = handlerWait.obtainMessage();
+                        message.what = SUCCESS;
+                        handlerWait.sendMessage(message);
                     }
 
                     @Override
                     public void onFailure(Call call, IOException e) {
+                        Message message = handlerWait.obtainMessage();
+                        message.what = FAIL;
+                        handlerWait.sendMessage(message);
                     }
                 });
             }
@@ -639,6 +629,24 @@ public class DetectActivity extends AppCompatActivity {
             }messageHandler.sendMessage((messageHandler.obtainMessage()));
 
         }
+    };
+
+    private Handler handlerWait = new Handler(){
+      @Override
+        public void handleMessage(Message msg){
+          switch (msg.what){
+              case SUCCESS:
+                  Log.d("DetectActivity","1111");
+                  waitingDialog.dismiss();
+                  handler.post(runnableUi);
+
+                  break;
+
+              case FAIL:
+                  Toast.makeText(DetectActivity.this, "网络出现了问题", Toast.LENGTH_SHORT).show();
+                  break;
+          }
+      }
     };
 
 
